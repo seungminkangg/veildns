@@ -20,9 +20,9 @@ public enum SystemProxy {
         guard let set = SCNetworkSetCopyCurrent(prefs),
               let services = SCNetworkSetCopyServices(set) as? [SCNetworkService] else { return [] }
         return services.filter(SCNetworkServiceGetEnabled).compactMap { service in
-            guard let name = SCNetworkServiceGetName(service),
+            guard let name = SCNetworkServiceGetName(service), let id = SCNetworkServiceGetServiceID(service),
                   SCNetworkServiceCopyProtocol(service, kSCNetworkProtocolTypeProxies) != nil else { return nil }
-            return NetworkService(id: SCNetworkServiceGetServiceID(service) as String, name: name as String)
+            return NetworkService(id: id as String, name: name as String)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
@@ -39,6 +39,16 @@ public enum SystemProxy {
         return SCNetworkProtocolGetConfiguration(proxy) as? [String: Any] ?? [:]
     }
 
+    /// Configd's published setup is distinct from merely committed preferences.
+    public static func applied(serviceID: String) throws -> [String: Any] {
+        guard let store = SCDynamicStoreCreate(nil, "VeilDNS status" as CFString, nil, nil) else {
+            throw VeilError.message("적용된 네트워크 상태를 확인할 수 없습니다.")
+        }
+        let key = SCDynamicStoreKeyCreateNetworkServiceEntity(nil, kSCDynamicStoreDomainSetup,
+            serviceID as CFString, kSCEntNetProxies)
+        return SCDynamicStoreCopyValue(store, key) as? [String: Any] ?? [:]
+    }
+
     public static func apply(_ journal: ProxyJournal) throws {
         let original = try journal.original()
         try ProxyPlan.validateOriginal(original)
@@ -53,6 +63,7 @@ public enum SystemProxy {
     @discardableResult
     public static func restore(_ journal: ProxyJournal) throws -> [String] {
         let original = try journal.original()
+        try ProxyPlan.validateOriginal(original)
         var conflicts: [String] = []
         try mutate(serviceID: journal.serviceID) { current in
             let result = ProxyPlan.restoration(current: current, original: original, port: journal.port)

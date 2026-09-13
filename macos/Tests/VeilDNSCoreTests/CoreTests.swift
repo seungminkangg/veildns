@@ -108,6 +108,12 @@ struct ProxyPlanTests {
         let invalid = try ProxyJournal(serviceID: "", serviceName: "bad", original: [:], ownerUID: 0, appPID: 1, enginePID: 2)
         #expect(throws: VeilError.self) { try invalid.original() }
     }
+
+    @Test func tamperedRestoreValuesAreRejected() {
+        #expect(throws: VeilError.self) { try ProxyPlan.validateOriginal(["HTTPEnable": "off"]) }
+        #expect(throws: VeilError.self) { try ProxyPlan.validateOriginal(["HTTPPort": 99999]) }
+        #expect(throws: VeilError.self) { try ProxyPlan.validateOriginal(["HTTPSProxy": ["unexpected"]]) }
+    }
 }
 
 @Suite("Privilege command encoding")

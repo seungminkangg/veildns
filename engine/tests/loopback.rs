@@ -199,6 +199,84 @@ fn record(body: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn chunked_http_never_forwards_proxy_credentials_in_trailers() {
+    let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = server.local_addr().unwrap();
+    let upstream = tokio::spawn(async move {
+        let (mut stream, _) = server.accept().await.unwrap();
+        let head = header(&mut stream).await;
+        assert!(head.to_lowercase().contains("transfer-encoding: chunked"));
+        assert!(!head.to_lowercase().contains("proxy-authorization"));
+        let mut body = Vec::new();
+        // The sanitized final empty chunk terminates with an empty trailer block.
+        timeout(Duration::from_secs(3), async {
+            while !body.ends_with(b"0\r\n\r\n") {
+                let mut byte = [0];
+                assert_eq!(stream.read(&mut byte).await.unwrap(), 1);
+                body.push(byte[0]);
+                assert!(body.len() < 4096);
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&body)
+                .to_lowercase()
+                .contains("secret")
+        );
+        assert!(body.windows(4).any(|w| w == b"test"));
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+    });
+    let (address, stop, task, _) = proxy(Config {
+        allow_private: true,
+        ..Config::default()
+    })
+    .await;
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    stream.write_all(format!("POST http://{target}/ HTTP/1.1\r\nHost: {target}\r\nTransfer-Encoding: chunked\r\nTrailer: Proxy-Authorization\r\nConnection: close\r\n\r\n4\r\ntest\r\n0\r\nProxy-Authorization: Basic secret\r\n\r\n").as_bytes()).await.unwrap();
+    assert!(header(&mut stream).await.starts_with("HTTP/1.1 200"));
+    upstream.await.unwrap();
+    stop_proxy(stop, task).await;
+}
+
+#[tokio::test]
+async fn oversized_headers_are_rejected_without_upstream_connection() {
+    let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = server.local_addr().unwrap();
+    let (address, stop, task, metrics) = proxy(Config {
+        allow_private: true,
+        ..Config::default()
+    })
+    .await;
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    let request = format!(
+        "GET http://{target}/ HTTP/1.1\r\nHost: {target}\r\nX-Large: {}\r\n\r\n",
+        "x".repeat(40 * 1024)
+    );
+    let _ = stream.write_all(request.as_bytes()).await;
+    let mut reply = [0; 4096];
+    let received = timeout(Duration::from_secs(3), stream.read(&mut reply)).await;
+    assert!(
+        received.is_ok(),
+        "oversized header did not close: requests={}",
+        metrics.requests.load(Ordering::Relaxed)
+    );
+    let received = received.unwrap();
+    if let Ok(n) = received {
+        assert!(n == 0 || String::from_utf8_lossy(&reply[..n]).starts_with("HTTP/1.1 431"));
+    }
+    assert!(
+        timeout(Duration::from_millis(50), server.accept())
+            .await
+            .is_err()
+    );
+    stop_proxy(stop, task).await;
+}
+
+#[tokio::test]
 async fn fragments_sni_from_multiple_client_reads_and_tls_records_without_changing_handshake() {
     let hello = client_hello("www.example.com");
     let cut = hello.len() - 7;

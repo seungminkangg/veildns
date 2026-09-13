@@ -52,7 +52,22 @@ public enum SecureFiles {
               actual.resolvingSymlinksInPath().path == expected.standardizedFileURL.path else {
             throw VeilError.message("허용되지 않은 복구 기록 경로입니다.")
         }
-        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        // Descriptor-relative traversal prevents directory replacement between path validation and open.
+        var parentFD = open(home, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard parentFD >= 0 else { throw VeilError.message("사용자 홈 폴더를 안전하게 열 수 없습니다.") }
+        defer { close(parentFD) }
+        for component in ["Library", "Application Support", "VeilDNS"] {
+            let next = openat(parentFD, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            guard next >= 0 else { throw VeilError.message("복구 기록 폴더를 안전하게 열 수 없습니다.") }
+            close(parentFD)
+            parentFD = next
+        }
+        var directoryInfo = stat()
+        guard fstat(parentFD, &directoryInfo) == 0, directoryInfo.st_uid == ownerUID,
+              directoryInfo.st_mode & 0o777 == 0o700 else {
+            throw VeilError.message("복구 기록 폴더의 권한이 올바르지 않습니다.")
+        }
+        let fd = openat(parentFD, "proxy-journal.json", O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         guard fd >= 0 else { throw VeilError.message("복구 기록을 열 수 없습니다.") }
         defer { close(fd) }
         var info = stat()

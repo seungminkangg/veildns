@@ -7,11 +7,13 @@ let package = Package(
     products: [
         .executable(name: "VeilDNS", targets: ["VeilDNS"]),
         .executable(name: "VeilDNSProxyHelper", targets: ["VeilDNSProxyHelper"]),
+        .executable(name: "VeilDNSIntegrationChecks", targets: ["VeilDNSIntegrationChecks"]),
     ],
     targets: [
         .target(name: "VeilDNSCore"),
         .executableTarget(name: "VeilDNS", dependencies: ["VeilDNSCore"]),
         .executableTarget(name: "VeilDNSProxyHelper", dependencies: ["VeilDNSCore"]),
+        .executableTarget(name: "VeilDNSIntegrationChecks", dependencies: ["VeilDNSCore"]),
         .testTarget(name: "VeilDNSCoreTests", dependencies: ["VeilDNSCore"]),
     ],
     swiftLanguageModes: [.v6]

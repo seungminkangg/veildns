@@ -35,7 +35,7 @@ HTTPS는 클라이언트와 원래 서버 사이의 TLS 연결을 유지한다. 
 | 비동기 I/O | Tokio의 TCP, 타이머, 작업 취소·동시성 제어를 사용한다. 채택만으로 자원 제한이나 오류 처리가 완성되지는 않는다. | [Tokio 공식 설명](https://tokio.rs/) |
 | DoH HTTP 클라이언트 | reqwest와 Rustls 계열 TLS를 사용한다. 클라이언트를 재사용하고 자체 프록시 상속·자동 redirect를 명시적으로 제어한다. | [reqwest 공식 crate 문서](https://docs.rs/reqwest/latest/reqwest/) |
 | macOS UI | SwiftUI 네이티브 앱. 조사에서 확인한 안정 Swift 발표는 6.3.3이며 발표문은 Xcode 26.6 포함을 명시한다. 패키지 최소 버전과 실제 빌드에 사용한 버전은 구분한다. | [Swift 6.3.3 발표](https://forums.swift.org/t/announcing-swift-6-3-3/87888) |
-| 시스템 통합 | `networksetup`으로 서비스별 웹·보안 웹 프록시를 관리한다. 실제 macOS 상태와 명령 종료 결과를 검증한다. | [Apple networksetup 안내](https://support.apple.com/en-lamr/guide/remote-desktop/apdd0c5a2d5/mac) |
+| 시스템 통합 | SystemConfiguration의 SCPreferences 잠금·커밋·적용으로 서비스별 웹·보안 웹 프록시를 관리한다. 기존에 없던 키까지 정확히 복구하기 위해 문자열 기반 `networksetup` 설정 대신 타입이 있는 원본 사전을 보존한다. | [Apple SystemConfiguration](https://developer.apple.com/documentation/systemconfiguration) |
 
 도구 버전은 조사 시점의 스냅샷이다. 실제 고정 버전은 저장소의 toolchain·manifest·lockfile 및 CI 기록이 기준이다. 아직 출시되지 않은 도구를 안정판처럼 표기하지 않는다.
 
@@ -60,7 +60,7 @@ HTTP CONNECT는 목적지 `host:port`로 TCP 터널을 만든다. 성공 응답 
 
 TCP read 한 번을 ClientHello 하나로 취급하지 않는다. TLS record와 handshake 길이를 확인하고 불완전 입력·여러 record·큰 ClientHello를 처리해야 한다. TLS는 handshake가 여러 record에 걸치는 것을 허용하되 다른 record 종류를 그 사이에 끼우지 못하게 한다. 분할 시 handshake payload를 그대로 유지하고 record header와 길이만 일관되게 구성한다. **TLS record 분할과 IP fragmentation, TCP segment 분할은 서로 다르다.** TCP `write`를 나누거나 `TCP_NODELAY`를 켰다는 이유로 실제 패킷 경계를 보장하지 않는다. [RFC 8446 §5.1](https://www.rfc-editor.org/rfc/rfc8446#section-5.1)
 
-DoH는 DNS wire message를 HTTPS로 전달하는 RFC 8484를 기준으로 한다. 응답 크기·종료 시간·DNS 질문 일치·응답 상태를 검증한다. 자체 macOS 프록시를 DoH 클라이언트가 다시 사용하면 연결 루프가 생길 수 있으므로 프록시 상속을 끈다. reqwest의 기본 자동 redirect도 명시적으로 제한한다. 인증서 검증을 끄거나 DoH 실패를 평문 DNS 재시도로 감추지 않는다. endpoint의 IP bootstrap은 대상 서버의 TLS 신원 검증을 유지해야 한다. [RFC 8484](https://www.rfc-editor.org/rfc/rfc8484.html), [reqwest proxy·redirect 기본값](https://docs.rs/reqwest/latest/reqwest/)
+RFC 8484는 DNS wire message를 HTTPS로 전달하는 표준이다. 현재 Rust 엔진은 고정 제공자가 공식 지원하는 **DoH JSON API**를 사용한다. Cloudflare `/dns-query`와 Google `/resolve`에 `application/dns-json`을 요청하며 범용 RFC 8484 wire 클라이언트라고 주장하지 않는다. 응답 크기·종료 시간·DNS 질문·CNAME 체인·응답 상태를 검증한다. 자체 macOS 프록시를 DoH 클라이언트가 다시 사용하지 않도록 프록시 상속을 끄고 자동 redirect도 차단한다. 인증서 검증을 끄거나 DoH 실패를 평문 DNS 재시도로 감추지 않는다. 고정 IP bootstrap에서도 대상 서버의 TLS 신원 검증을 유지한다. 선택 설치용 macOS DNS 프로파일은 Apple 시스템 resolver의 표준 DoH 구현을 사용한다. [Cloudflare JSON API](https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/make-api-requests/dns-json/), [Google JSON API](https://developers.google.com/speed/public-dns/docs/doh/json), [RFC 8484](https://www.rfc-editor.org/rfc/rfc8484.html), [reqwest](https://docs.rs/reqwest/latest/reqwest/)
 
 프록시 설정 적용 전 서비스별 서버·포트·활성화 상태를 복구 자료로 저장한다. 시작 실패·정상 종료·이전 비정상 종료 후 복구 경로가 필요하다. 사용자나 다른 앱이 이후 변경한 설정을 덮어쓰지 않도록 현재 설정이 VeilDNS 소유인지 확인한다. 기존 인증 프록시 비밀번호를 복구할 수 있다고 가정하지 않는다. 관리자 권한이 필요한 경우 macOS 권한 승인 UI를 사용하며 비밀번호를 앱 설정에 저장하지 않는다.
 

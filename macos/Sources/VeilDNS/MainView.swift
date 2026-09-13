@@ -215,6 +215,22 @@ struct MainView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             card {
+                Label("시스템 암호화 DNS · 선택 사항", systemImage: "doc.badge.gearshape").font(.headline)
+                Text("앱 밖에서도 macOS의 암호화 DNS를 쓰려면 동봉한 Cloudflare 또는 Google 프로파일을 직접 설치할 수 있습니다. 프로파일은 앱을 중지해도 유지되며 시스템 설정에서 별도로 제거해야 합니다.")
+                    .font(.callout).foregroundStyle(.secondary)
+                HStack(spacing: 18) {
+                    Button("DNS 프로파일 보기") {
+                        guard let folder = Bundle.main.resourceURL?.appendingPathComponent("Profiles"),
+                              FileManager.default.fileExists(atPath: folder.path) else {
+                            model.message = "동봉된 DNS 프로파일을 찾을 수 없습니다. 소스 코드의 profiles 폴더를 확인해 주세요."
+                            return
+                        }
+                        NSWorkspace.shared.open(folder)
+                    }
+                    Link("설치·제거 안내", destination: URL(string: "https://github.com/seungminkangg/veildns/tree/main/profiles")!)
+                }.font(.callout)
+            }
+            card {
                 Label("독립적인 오픈소스 프로젝트", systemImage: "curlybraces").font(.headline)
                 Text("SecretDNS의 아이디어에서 출발한 독립 구현입니다. 길호넷의 공식 macOS 버전이 아니며 원본 코드·브랜드를 재배포하지 않습니다.")
                     .font(.callout).foregroundStyle(.secondary)

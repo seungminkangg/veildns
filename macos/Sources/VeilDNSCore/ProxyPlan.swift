@@ -10,9 +10,12 @@ public struct ProxyJournal: Codable, Sendable {
     public let enginePID: Int32
     public let createdAt: Date
     public let port: Int
+    public let appIdentity: ProcessIdentity?
+    public let engineIdentity: ProcessIdentity?
 
     public init(serviceID: String, serviceName: String, original: [String: Any], ownerUID: UInt32,
-                appPID: Int32, enginePID: Int32, port: Int = 8080) throws {
+                appPID: Int32, enginePID: Int32, port: Int = 8080,
+                appIdentity: ProcessIdentity? = nil, engineIdentity: ProcessIdentity? = nil) throws {
         self.serviceID = serviceID
         self.serviceName = serviceName
         originalPropertyList = try PropertyListSerialization.data(fromPropertyList: original, format: .binary, options: 0)
@@ -20,12 +23,14 @@ public struct ProxyJournal: Codable, Sendable {
         self.appPID = appPID
         self.enginePID = enginePID
         self.port = port
+        self.appIdentity = appIdentity
+        self.engineIdentity = engineIdentity
         createdAt = Date()
     }
 
     public func original() throws -> [String: Any] {
         guard version == 1, port == 8080, !serviceID.isEmpty, serviceID.count <= 128,
-              ownerUID != 0, appPID > 1, enginePID > 1,
+              ownerUID != 0, appPID > 1, enginePID > 1, appPID != enginePID,
               let original = try PropertyListSerialization.propertyList(from: originalPropertyList, options: [], format: nil) as? [String: Any] else {
             throw VeilError.message("복구 기록의 형식이 올바르지 않습니다. 네트워크 설정을 직접 확인해 주세요.")
         }
@@ -38,8 +43,26 @@ public enum ProxyPlan {
     private static let conflicts = ["HTTPEnable", "HTTPSEnable", "SOCKSEnable", "ProxyAutoConfigEnable", "ProxyAutoDiscoveryEnable"]
 
     public static func validateOriginal(_ original: [String: Any]) throws {
-        guard !conflicts.contains(where: { (original[$0] as? NSNumber)?.boolValue == true }) else {
+        guard !conflicts.contains(where: { key in
+            guard let value = original[key] else { return false }
+            guard let flag = value as? NSNumber else { return true }
+            return flag.boolValue
+        }) else {
             throw VeilError.message("선택한 네트워크에 다른 프록시 또는 자동 프록시가 켜져 있습니다. 기존 설정을 먼저 확인해 주세요.")
+        }
+        for group in groups {
+            if let address = original[group[1]] {
+                guard let address = address as? String, address.utf8.count <= 2048,
+                      !address.contains(where: { $0.isNewline || $0 == "\0" }) else {
+                    throw VeilError.message("기존 프록시 주소 형식을 안전하게 복구할 수 없습니다.")
+                }
+            }
+            if let port = original[group[2]] {
+                guard let port = port as? NSNumber, (0...65535).contains(port.intValue),
+                      port.doubleValue == Double(port.intValue) else {
+                    throw VeilError.message("기존 프록시 포트 형식을 안전하게 복구할 수 없습니다.")
+                }
+            }
         }
     }
 

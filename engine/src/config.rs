@@ -81,6 +81,12 @@ impl Config {
         Ok(())
     }
 
+    pub fn needs_inspection(&self, host: &str) -> bool {
+        self.fragmentation != Fragmentation::Off
+            && (self.fragmentation != Fragmentation::Selected || !self.domains.is_empty())
+            && !self.exclusions.iter().any(|pattern| matches(pattern, host))
+    }
+
     pub fn should_fragment(&self, host: &str, sni: &str) -> bool {
         if self.fragmentation == Fragmentation::Off
             || self

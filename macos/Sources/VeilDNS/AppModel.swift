@@ -21,6 +21,7 @@ final class AppModel {
     private var helperFailure: String?
     private var journal: ProxyJournal?
     private var initialized = false
+    private var monitorTask: Task<Void, Never>?
 
     var isBusy: Bool { state == .starting || state == .stopping }
     var isActive: Bool { state == .active }
@@ -96,7 +97,8 @@ final class AppModel {
             try SecureFiles.write(JSONEncoder().encode(configuration), to: configURL)
             try await engine.start(configurationURL: configURL)
             let snapshot = try ProxyJournal(serviceID: service.id, serviceName: service.name, original: original,
-                ownerUID: getuid(), appPID: getpid(), enginePID: engine.pid)
+                ownerUID: getuid(), appPID: getpid(), enginePID: engine.pid,
+                appIdentity: try ProcessIdentity.capture(getpid()), engineIdentity: try ProcessIdentity.capture(engine.pid))
             journal = snapshot
             // Persist the full original dictionary before any privileged mutation.
             try SecureFiles.write(JSONEncoder().encode(snapshot), to: SecureFiles.journalURL)
@@ -122,8 +124,10 @@ final class AppModel {
                 }
                 guard engine.isRunning else { throw VeilError.message("엔진이 종료되어 연결을 중단했습니다.") }
                 let current = try SystemProxy.read(serviceID: snapshot.serviceID)
-                if ProxyPlan.isOwned(current, original: original) {
+                if ProxyPlan.isOwned(current, original: original),
+                   ProxyPlan.isOwned(try SystemProxy.applied(serviceID: snapshot.serviceID), original: original) {
                     state = .active
+                    beginMonitoring(snapshot)
                     return
                 }
                 try await Task.sleep(for: .milliseconds(100))
@@ -139,9 +143,30 @@ final class AppModel {
 
     func stop() async {
         guard state == .active else { return }
+        monitorTask?.cancel(); monitorTask = nil
         state = .stopping
         await engine.stop()
         await finishRestoration()
+    }
+
+    private func beginMonitoring(_ snapshot: ProxyJournal) {
+        monitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                guard let self, self.state == .active else { return }
+                do {
+                    let original = try snapshot.original()
+                    guard ProxyPlan.isOwned(try SystemProxy.read(serviceID: snapshot.serviceID), original: original),
+                          ProxyPlan.isOwned(try SystemProxy.applied(serviceID: snapshot.serviceID), original: original) else {
+                        throw VeilError.message("다른 곳에서 프록시 설정을 변경하여 VeilDNS 연결을 중지합니다.")
+                    }
+                } catch {
+                    self.message = error.localizedDescription
+                    await self.stop()
+                    return
+                }
+            }
+        }
     }
 
     private func finishRestoration() async {
@@ -159,7 +184,12 @@ final class AppModel {
                     let installed = ProxyPlan.installed(on: original)
                     return group.allSatisfy { ProxyPlan.equal(current[$0], installed[$0]) }
                 }
-                guard !stillOwned, helperResult != nil || helperFailure != nil || helperTask == nil else {
+                let published = try SystemProxy.applied(serviceID: snapshot.serviceID)
+                let publishedStillOwned = ProxyPlan.groups.contains { group in
+                    let installed = ProxyPlan.installed(on: original)
+                    return group.allSatisfy { ProxyPlan.equal(published[$0], installed[$0]) }
+                }
+                guard !stillOwned, !publishedStillOwned, helperResult != nil || helperFailure != nil || helperTask == nil else {
                     throw VeilError.message("복구 완료를 확인하지 못했습니다. 권한 대화상자를 취소하고 복구 버튼을 눌러 주세요.")
                 }
                 if !assessment.conflicts.isEmpty {

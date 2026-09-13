@@ -23,11 +23,23 @@ struct ProxyHelper {
             let queue = kqueue()
             guard queue >= 0 else { throw VeilError.message("프로세스 종료 감시를 시작할 수 없습니다.") }
             defer { close(queue) }
-            for pid in [journal.appPID, journal.enginePID] {
-                try validateProcess(pid, owner: owner)
+            guard let app = journal.appIdentity, let engine = journal.engineIdentity,
+                  app.pid == journal.appPID, engine.pid == journal.enginePID,
+                  engine.parentPID == app.pid, app.realUID == owner, engine.realUID == owner,
+                  app.startSeconds > 0, engine.startSeconds > 0 else {
+                throw VeilError.message("앱과 엔진의 실행 정보를 확인할 수 없습니다.")
+            }
+            for identity in [app, engine] {
+                let pid = identity.pid
+                guard try ProcessIdentity.capture(pid) == identity else {
+                    throw VeilError.message("권한 승인 중 프로세스가 변경되어 적용을 중단했습니다.")
+                }
                 var change = kevent(ident: UInt(pid), filter: Int16(EVFILT_PROC), flags: UInt16(EV_ADD | EV_ENABLE | EV_ONESHOT), fflags: NOTE_EXIT, data: 0, udata: nil)
                 guard kevent(queue, &change, 1, nil, 0, nil) >= 0 else {
                     throw VeilError.message("앱 또는 엔진이 이미 종료되었습니다.")
+                }
+                guard try ProcessIdentity.capture(pid) == identity else {
+                    throw VeilError.message("종료 감시 등록 중 프로세스가 변경되었습니다.")
                 }
             }
             var event = kevent()
@@ -54,19 +66,6 @@ struct ProxyHelper {
             // Only localized, bounded errors leave this helper; journal content never appears in output.
             FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
             exit(1)
-        }
-    }
-
-    private static func validateProcess(_ pid: pid_t, owner: uid_t) throws {
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        var info = kinfo_proc()
-        var length = MemoryLayout<kinfo_proc>.size
-        let result = mib.withUnsafeMutableBufferPointer { buffer in
-            sysctl(buffer.baseAddress, UInt32(buffer.count), &info, &length, nil, 0)
-        }
-        guard result == 0, length == MemoryLayout<kinfo_proc>.size,
-              info.kp_eproc.e_pcred.p_ruid == owner, kill(pid, 0) == 0 else {
-            throw VeilError.message("감시 대상 프로세스와 복구 기록의 소유자가 일치하지 않습니다.")
         }
     }
 

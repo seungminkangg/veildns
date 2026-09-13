@@ -30,7 +30,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     BoxError,
-    config::{Config, Fragmentation, normalize_domain},
+    config::{Config, normalize_domain},
     dns::{DohResolver, is_public},
     error,
     tls::{self, Inspection},
@@ -124,6 +124,20 @@ async fn handle(
     state: Arc<State>,
 ) -> Result<Response<ProxyBody>, Infallible> {
     state.metrics.requests.fetch_add(1, Ordering::Relaxed);
+    // Hyper's read buffer limit bounds incomplete parsing, but a complete header
+    // can arrive in an already allocated buffer. Enforce a forwarding limit too.
+    let header_bytes = request
+        .headers()
+        .iter()
+        .map(|(name, value)| name.as_str().len() + value.as_bytes().len() + 4)
+        .sum::<usize>();
+    if request.uri().to_string().len() > 8192 || header_bytes > 32 * 1024 {
+        state.metrics.errors.fetch_add(1, Ordering::Relaxed);
+        return Ok(response(
+            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+            "Proxy request headers are too large\n",
+        ));
+    }
     let result = if request.method() == hyper::Method::CONNECT {
         connect(request, state.clone()).await
     } else {
@@ -296,7 +310,7 @@ async fn connect(
             task_state.metrics.tunnels.fetch_add(1, Ordering::Relaxed);
             let mut client = TokioIo::new(upgraded);
             let mut upstream = IdleIo::new(upstream);
-            if task_state.config.fragmentation != Fragmentation::Off {
+            if task_state.config.needs_inspection(&dest.host) {
                 inspect_and_forward(&mut client, &mut upstream, &dest.host, &task_state).await?;
             }
             tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
@@ -391,6 +405,7 @@ async fn forward(
     request
         .headers_mut()
         .insert("connection", HeaderValue::from_static("close"));
+    let request = request.map(clean_body);
     let stream = open_upstream(&dest, &state).await?;
     let (mut sender, connection) =
         hyper::client::conn::http1::handshake(TokioIo::new(IdleIo::new(stream)))
@@ -405,7 +420,21 @@ async fn forward(
         .map_err(|_| StatusCode::GATEWAY_TIMEOUT)?
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
     sanitize_headers(response.headers_mut()).map_err(|_| StatusCode::BAD_GATEWAY)?;
-    Ok(response.map(|body| body.map_err(|e| -> BoxError { Box::new(e) }).boxed_unsync()))
+    Ok(response.map(clean_body))
+}
+
+fn clean_body(body: Incoming) -> ProxyBody {
+    body.map_frame(|mut frame| {
+        if let Some(trailers) = frame.trailers_mut()
+            && sanitize_headers(trailers).is_err()
+        {
+            // Invalid hop-by-hop trailer metadata is never forwarded.
+            trailers.clear();
+        }
+        frame
+    })
+    .map_err(|error| -> BoxError { Box::new(error) })
+    .boxed_unsync()
 }
 
 fn sanitize_headers(headers: &mut HeaderMap) -> Result<(), StatusCode> {
