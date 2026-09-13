@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadIdentifier</key>
+    <string>io.github.veildns.dns.cloudflare</string>
+    <key>PayloadUUID</key>
+    <string>72073D78-C3BD-4816-B118-B64C46A75577</string>
+    <key>PayloadDisplayName</key>
+    <string>VeilDNS - Cloudflare DNS over HTTPS</string>
+    <key>PayloadDescription</key>
+    <string>선택 설치용 macOS 시스템 DNS 설정. 시스템 resolver의 모든 도메인 질의를 Cloudflare HTTPS DNS로 처리하도록 구성합니다. VeilDNS 앱을 종료해도 유지됩니다. 해제하려면 시스템 설정에서 이 프로파일을 제거하세요. SNI 분할, VPN, 인증서 또는 기기 관리 등록은 포함하지 않습니다.</string>
+    <key>PayloadOrganization</key>
+    <string>VeilDNS Open Source</string>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.dnsSettings.managed</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadIdentifier</key>
+            <string>io.github.veildns.dns.cloudflare.settings</string>
+            <key>PayloadUUID</key>
+            <string>11281590-C068-44BB-B9D6-DB1F02D9992F</string>
+            <key>PayloadDisplayName</key>
+            <string>Cloudflare DNS over HTTPS</string>
+            <key>DNSSettings</key>
+            <dict>
+                <key>DNSProtocol</key>
+                <string>HTTPS</string>
+                <key>ServerURL</key>
+                <string>https://cloudflare-dns.com/dns-query</string>
+                <key>ServerAddresses</key>
+                <array>
+                    <string>1.1.1.1</string>
+                    <string>1.0.0.1</string>
+                    <string>2606:4700:4700::1111</string>
+                    <string>2606:4700:4700::1001</string>
+                </array>
+            </dict>
+            <key>OnDemandRules</key>
+            <array>
+                <dict>
+                    <key>Action</key>
+                    <string>Connect</string>
+                </dict>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

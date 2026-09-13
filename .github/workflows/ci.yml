@@ -1,0 +1,91 @@
+name: macOS build and verification
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS / ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            arch: arm64
+          - runner: macos-26-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Toolchain evidence
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+          rustup show active-toolchain
+          rustc --version
+      - name: Engine formatting, lint, and tests
+        run: |
+          cargo fmt --manifest-path engine/Cargo.toml --check
+          cargo clippy --manifest-path engine/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path engine/Cargo.toml --locked
+      - name: Swift model and proxy recovery tests
+        run: swift test --package-path macos
+      - name: Build application bundle
+        run: bash scripts/build-macos.sh
+      - name: Live HTTPS through DoH and SNI fragmentation
+        run: |
+          python3 scripts/smoke-proxy.py build/VeilDNS.app/Contents/Resources/veildns-engine --resolver cloudflare
+          python3 scripts/smoke-proxy.py build/VeilDNS.app/Contents/Resources/veildns-engine --resolver google
+      - name: Bundle and launch smoke test
+        run: bash scripts/smoke-app.sh
+      - name: Preserve launch evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Launch-evidence-${{ matrix.arch }}
+          path: |
+            build/app-launch.log
+            build/launch.png
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: VeilDNS-macos-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: VeilDNS-macos-*
+          path: dist
+          merge-multiple: true
+      - name: Publish verified preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test "$RELEASE_TAG" = "v$(tr -d '\r\n' < VERSION)"
+          gh release create "$RELEASE_TAG" dist/* --verify-tag --prerelease --title "VeilDNS $RELEASE_TAG" --notes-file docs/RELEASE_NOTES.md

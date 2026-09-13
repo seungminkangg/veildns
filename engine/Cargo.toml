@@ -1,0 +1,29 @@
+[package]
+name = "veildns-engine"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Local encrypted-DNS HTTP proxy with selective TLS record fragmentation"
+
+[dependencies]
+bytes = "1"
+http-body-util = "0.1"
+hyper = { version = "1.11", features = ["client", "server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "query"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal", "fs"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

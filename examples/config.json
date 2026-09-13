@@ -1,0 +1,9 @@
+{
+  "listen_port": 8080,
+  "resolver": "cloudflare",
+  "fragmentation": "selected",
+  "domains": ["example.com", "*.example.com"],
+  "exclusions": [],
+  "fragment_delay_ms": 5,
+  "allow_private": false
+}
