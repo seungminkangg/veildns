@@ -72,7 +72,7 @@ jobs:
           retention-days: 14
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
     needs: macos
     runs-on: ubuntu-latest
     permissions:
@@ -87,7 +87,14 @@ jobs:
       - name: Publish verified preview
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
-          test "$RELEASE_TAG" = "v$(tr -d '\r\n' < VERSION)"
-          gh release create "$RELEASE_TAG" dist/* --verify-tag --prerelease --title "VeilDNS $RELEASE_TAG" --notes-file docs/RELEASE_NOTES.md
+          RELEASE_TAG="v$(tr -d '\r\n' < VERSION)"
+          if [[ "$SOURCE_REF" == refs/tags/* ]]; then
+            test "$SOURCE_REF" = "refs/tags/$RELEASE_TAG"
+            TAG_ARGS=(--verify-tag)
+          else
+            TAG_ARGS=(--target "$SOURCE_SHA")
+          fi
+          gh release create "$RELEASE_TAG" dist/* "${TAG_ARGS[@]}" --prerelease --title "VeilDNS $RELEASE_TAG" --notes-file docs/RELEASE_NOTES.md

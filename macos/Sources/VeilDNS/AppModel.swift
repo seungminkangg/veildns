@@ -55,9 +55,10 @@ final class AppModel {
             if FileManager.default.fileExists(atPath: settingsURL.path) {
                 settings = try JSONDecoder().decode(AppSettings.self, from: Data(contentsOf: settingsURL))
             }
-            refreshServices()
-            if FileManager.default.fileExists(atPath: SecureFiles.journalURL.path) { state = .recovery }
         } catch { message = error.localizedDescription }
+        refreshServices()
+        // A damaged preferences file must never hide a valid network recovery journal.
+        if FileManager.default.fileExists(atPath: SecureFiles.journalURL.path) { state = .recovery }
         engine.onExit = { [weak self] in
             guard let self, self.state == .active else { return }
             self.message = "네트워크 엔진이 종료되었습니다. 이전 프록시 설정을 복구합니다."
@@ -65,13 +66,20 @@ final class AppModel {
         }
     }
 
-    func refreshServices() {
+    func refreshServices(preferPrimary: Bool = false) {
         do {
             services = try SystemProxy.services()
-            if !services.contains(where: { $0.id == settings.serviceID }) {
-                settings.serviceID = services.first?.id ?? ""
-            }
+            settings.serviceID = SystemProxy.preferredServiceID(available: services.map(\.id), saved: settings.serviceID,
+                primary: try SystemProxy.primaryServiceID(), preferPrimary: preferPrimary && state == .idle)
         } catch { message = error.localizedDescription }
+    }
+
+    private func requirePrimaryService(_ serviceID: String) throws {
+        guard let primary = try SystemProxy.primaryServiceID(), primary != serviceID else { return }
+        if let name = services.first(where: { $0.id == primary })?.name {
+            throw VeilError.message("현재 인터넷 연결은 ‘\(name)’을 사용 중입니다. 네트워크 서비스에서 해당 항목을 선택한 뒤 다시 시작하세요.")
+        }
+        throw VeilError.message("현재 인터넷 연결의 네트워크 서비스가 목록에 없습니다. 네트워크 목록을 새로고침한 뒤 다시 시작하세요.")
     }
 
     func saveSettings() {
@@ -89,6 +97,7 @@ final class AppModel {
                 throw VeilError.message("이전 실행의 네트워크 설정을 먼저 복구해 주세요.")
             }
             guard let service = selectedService else { throw VeilError.message("적용할 네트워크 서비스를 선택해 주세요.") }
+            try requirePrimaryService(service.id)
             let configuration = try settings.engineConfiguration()
             let original = try SystemProxy.read(serviceID: service.id)
             try ProxyPlan.validateOriginal(original)
@@ -126,6 +135,8 @@ final class AppModel {
                 let current = try SystemProxy.read(serviceID: snapshot.serviceID)
                 if ProxyPlan.isOwned(current, original: original),
                    ProxyPlan.isOwned(try SystemProxy.applied(serviceID: snapshot.serviceID), original: original) {
+                    // Authorization may have remained open while the active route changed.
+                    try requirePrimaryService(snapshot.serviceID)
                     state = .active
                     beginMonitoring(snapshot)
                     return
@@ -154,7 +165,12 @@ final class AppModel {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 guard let self, self.state == .active else { return }
+                var networkChanged = false
                 do {
+                    if let primary = try SystemProxy.primaryServiceID(), primary != snapshot.serviceID {
+                        networkChanged = true
+                        throw VeilError.message("인터넷 연결에 사용하는 네트워크가 바뀌어 VeilDNS를 중지하고 이전 설정을 복구합니다. 새 네트워크를 확인한 뒤 다시 시작하세요.")
+                    }
                     let original = try snapshot.original()
                     guard ProxyPlan.isOwned(try SystemProxy.read(serviceID: snapshot.serviceID), original: original),
                           ProxyPlan.isOwned(try SystemProxy.applied(serviceID: snapshot.serviceID), original: original) else {
@@ -162,7 +178,13 @@ final class AppModel {
                     }
                 } catch {
                     self.message = error.localizedDescription
-                    await self.stop()
+                    // stop() cancels the monitor. Run restoration in a separate task so cancelling
+                    // this monitor cannot cancel the engine-exit and configd restoration waits.
+                    Task { [weak self, networkChanged] in
+                        guard let self else { return }
+                        await self.stop()
+                        if networkChanged, self.state == .idle { self.refreshServices(preferPrimary: true) }
+                    }
                     return
                 }
             }
@@ -177,19 +199,11 @@ final class AppModel {
         }
         do {
             if let snapshot = journal {
+                try await waitForRestoredSettings(snapshot)
                 let current = try SystemProxy.read(serviceID: snapshot.serviceID)
                 let original = try snapshot.original()
                 let assessment = ProxyPlan.restoration(current: current, original: original)
-                let stillOwned = ProxyPlan.groups.contains { group in
-                    let installed = ProxyPlan.installed(on: original)
-                    return group.allSatisfy { ProxyPlan.equal(current[$0], installed[$0]) }
-                }
-                let published = try SystemProxy.applied(serviceID: snapshot.serviceID)
-                let publishedStillOwned = ProxyPlan.groups.contains { group in
-                    let installed = ProxyPlan.installed(on: original)
-                    return group.allSatisfy { ProxyPlan.equal(published[$0], installed[$0]) }
-                }
-                guard !stillOwned, !publishedStillOwned, helperResult != nil || helperFailure != nil || helperTask == nil else {
+                guard helperResult != nil || helperFailure != nil || helperTask == nil else {
                     throw VeilError.message("복구 완료를 확인하지 못했습니다. 권한 대화상자를 취소하고 복구 버튼을 눌러 주세요.")
                 }
                 if !assessment.conflicts.isEmpty {
@@ -217,17 +231,25 @@ final class AppModel {
             let snapshot = try SecureFiles.readJournal(path: SecureFiles.journalURL.path, ownerUID: getuid())
             let result = try await HelperProcess.run(operation: "restore")
             guard result.restored else { throw VeilError.message(result.error.isEmpty ? "복구를 완료하지 못했습니다." : result.error) }
-            let current = try SystemProxy.read(serviceID: snapshot.serviceID)
-            let original = try snapshot.original()
-            let stillOwned = ProxyPlan.groups.contains { group in
-                let installed = ProxyPlan.installed(on: original)
-                return group.allSatisfy { ProxyPlan.equal(current[$0], installed[$0]) }
-            }
-            guard !stillOwned else { throw VeilError.message("프록시가 여전히 적용되어 있습니다. 복구 기록을 유지합니다.") }
+            try await waitForRestoredSettings(snapshot)
             if !result.preservedChanges.isEmpty { notice = "다른 앱에서 변경한 \(result.preservedChanges.joined(separator: ", ")) 설정을 유지했습니다." }
             try removeJournal()
             state = .idle
         } catch { message = error.localizedDescription; state = .recovery }
+    }
+
+    private func waitForRestoredSettings(_ snapshot: ProxyJournal) async throws {
+        let installed = ProxyPlan.installed(on: try snapshot.original())
+        for _ in 0..<50 {
+            let persistent = try SystemProxy.read(serviceID: snapshot.serviceID)
+            let published = try SystemProxy.applied(serviceID: snapshot.serviceID)
+            let owned = [persistent, published].contains { current in
+                ProxyPlan.groups.contains { group in group.allSatisfy { ProxyPlan.equal(current[$0], installed[$0]) } }
+            }
+            if !owned { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw VeilError.message("프록시 복구 완료를 확인하지 못했습니다. 복구 기록을 유지합니다.")
     }
 
     private func removeJournal() throws {

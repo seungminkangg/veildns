@@ -9,6 +9,7 @@ final class EngineProcess {
     private var errorOutput = Data()
     private var ready = false
     private var lifetimePipe: Pipe?
+    private var generation = UUID()
     var onExit: (@MainActor () -> Void)?
     var pid: pid_t { process?.processIdentifier ?? 0 }
     var isRunning: Bool { process?.isRunning == true }
@@ -19,6 +20,8 @@ final class EngineProcess {
             throw VeilError.message("앱에 네트워크 엔진이 포함되어 있지 않습니다. 완성된 VeilDNS.app 번들을 사용해 주세요.")
         }
         output.removeAll(); errorOutput.removeAll(); ready = false
+        let generation = UUID()
+        self.generation = generation
         let child = Process()
         let stdout = Pipe(), stderr = Pipe(), lifetime = Pipe()
         child.executableURL = resource
@@ -30,19 +33,22 @@ final class EngineProcess {
         stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil; return }
-            Task { @MainActor in self?.receive(data) }
+            Task { @MainActor in self?.receive(data, generation: generation) }
         }
         stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil; return }
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.generation == generation else { return }
                 self.errorOutput.append(data)
                 if self.errorOutput.count > 8192 { self.errorOutput = Data(self.errorOutput.suffix(8192)) }
             }
         }
         child.terminationHandler = { [weak self] _ in
-            Task { @MainActor in self?.onExit?() }
+            Task { @MainActor in
+                guard let self, self.generation == generation else { return }
+                self.onExit?()
+            }
         }
         process = child
         try child.run()
@@ -58,7 +64,8 @@ final class EngineProcess {
         throw VeilError.message("엔진 준비 응답을 받지 못해 시작을 중단했습니다.")
     }
 
-    private func receive(_ data: Data) {
+    private func receive(_ data: Data, generation: UUID) {
+        guard self.generation == generation else { return }
         output.append(data)
         while let newline = output.firstIndex(of: 10) {
             let line = output[..<newline]

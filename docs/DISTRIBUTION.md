@@ -19,6 +19,9 @@ bash scripts/smoke-app.sh
 
 GitHub Actions runs the corresponding build and checks on Apple Silicon and
 Intel macOS runners. Tag builds publish a prerelease only after both jobs pass.
+A maintainer can also include `[release]` in a commit pushed to `main`: that same
+run tests and packages the commit, then creates the version tag at the verified
+commit and publishes its artifacts. It does not rebuild a different source tree.
 The source tag, lockfile, runner logs and artifact hashes identify the inputs and
 outputs. This is a repeatable build recipe, not a claim of bit-for-bit reproducibility.
 

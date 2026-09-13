@@ -19,7 +19,7 @@ public struct ProcessIdentity: Codable, Equatable, Sendable {
             sysctl(buffer.baseAddress, UInt32(buffer.count), &info, &length, nil, 0)
         }
         guard pid > 1, result == 0, length == MemoryLayout<kinfo_proc>.size,
-              info.kp_proc.p_stat != SZOMB else {
+              Int32(info.kp_proc.p_stat) != SZOMB else {
             throw VeilError.message("프로세스 실행 정보를 확인할 수 없습니다.")
         }
         return .init(pid: pid, realUID: info.kp_eproc.e_pcred.p_ruid, parentPID: info.kp_eproc.e_ppid,

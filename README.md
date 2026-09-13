@@ -2,10 +2,12 @@
 
 **macOS에서 DNS over HTTPS와 선택 도메인 SNI 분할을 사용하는 오픈소스 앱.**
 
-[![macOS verification](https://github.com/seungminkangg/veildns/actions/workflows/ci.yml/badge.svg)](https://github.com/seungminkangg/veildns/actions/workflows/ci.yml)
+[![macOS verification](https://github.com/seungminkangg/veildns/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/seungminkangg/veildns/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-63dbc4.svg)](LICENSE)
 
 SwiftUI 메뉴 막대 앱과 Rust 네트워크 엔진으로 구성합니다. [시크릿DNS](https://secretdns.kilho.net/)의 공개 기능에서 영감을 받은 독립 구현이며, 길호넷의 공식 macOS판이나 제휴 제품이 아닙니다. 원본 코드·바이너리·브랜드 자산을 사용하지 않습니다.
+
+![VeilDNS running on macOS, captured from the native Apple Silicon CI build](docs/images/veildns-light.png)
 
 > **Preview**: macOS 15 이상, Apple Silicon 및 Intel. 공개 소스와 macOS 자동 검증을 제공합니다. 현재 배포 파일은 ad-hoc 서명이며 Apple 공증을 받은 앱이 아닙니다. 실제 사용자의 Mac, 브라우저 및 통신사 환경에 대한 검증 현황은 [검증 기록](docs/VALIDATION.md)을 확인하세요.
 

@@ -36,6 +36,7 @@ struct IntegrationChecks {
 
             let beforeServices = try SystemProxy.services()
             let before = try Dictionary(uniqueKeysWithValues: beforeServices.map { ($0.id, try SystemProxy.read(serviceID: $0.id)) })
+            let originalCurrentSet = try currentSetIDs()
             guard let prefs = SCPreferencesCreate(nil, "VeilDNS isolated integration" as CFString, nil),
                   let interfaces = SCNetworkInterfaceCopyAll() as? [SCNetworkInterface],
                   let interface = interfaces.first(where: { SCNetworkInterfaceGetBSDName($0) != nil }),
@@ -44,10 +45,9 @@ struct IntegrationChecks {
                 throw VeilError.message("Could not create isolated test service.")
             }
             let serviceID = rawServiceID as String
+            var needsServiceCleanup = true
             defer {
-                _ = SCNetworkServiceRemove(service)
-                _ = SCPreferencesCommitChanges(prefs)
-                _ = SCPreferencesApplyChanges(prefs)
+                if needsServiceCleanup { try? removeService(serviceID) }
             }
             try require(SCNetworkServiceSetName(service, "VeilDNS CI isolated \(UUID().uuidString)" as CFString), "name isolated service")
             try require(SCNetworkServiceSetEnabled(service, false), "disable isolated service")
@@ -56,7 +56,7 @@ struct IntegrationChecks {
             }
             try require(SCPreferencesCommitChanges(prefs), "persist isolated service")
             try require(SCPreferencesApplyChanges(prefs), "apply isolated service")
-            try require(!(try SystemProxy.services()).contains(where: { $0.id == serviceID }), "isolated service must not enter current network set")
+            try require(!(try currentSetIDs()).contains(serviceID), "isolated service must not enter current network set")
 
             for scenario in ["engine-exit", "app-crash", "foreign-edit", "stale-identity"] {
                 try runScenario(scenario, serviceID: serviceID, owner: owner, group: group, journalURL: journalURL)
@@ -65,11 +65,45 @@ struct IntegrationChecks {
             for (id, original) in before {
                 try require(NSDictionary(dictionary: try SystemProxy.read(serviceID: id)).isEqual(to: original), "active service proxy settings unchanged")
             }
-            print("PASS active network services unchanged; isolated service removed on exit")
+            try require(try currentSetIDs() == originalCurrentSet, "current network set membership unchanged")
+            try removeService(serviceID)
+            needsServiceCleanup = false
+            try FileManager.default.removeItem(at: journalURL)
+            try FileManager.default.removeItem(at: directory)
+            try require(!FileManager.default.fileExists(atPath: directory.path), "test recovery directory removed")
+            print("PASS active network services unchanged; isolated service and recovery directory removal verified")
         } catch {
             FileHandle.standardError.write(Data(("FAIL " + error.localizedDescription + "\n").utf8))
             exit(1)
         }
+    }
+
+    private static func currentSetIDs() throws -> Set<String> {
+        guard let prefs = SCPreferencesCreate(nil, "VeilDNS current-set audit" as CFString, nil),
+              let current = SCNetworkSetCopyCurrent(prefs),
+              let services = SCNetworkSetCopyServices(current) as? [SCNetworkService] else {
+            throw VeilError.message("Cannot inspect the current network set.")
+        }
+        return Set(services.compactMap { service in
+            guard let id = SCNetworkServiceGetServiceID(service) else { return nil }
+            return id as String
+        })
+    }
+
+    private static func removeService(_ serviceID: String) throws {
+        guard let cleanup = SCPreferencesCreate(nil, "VeilDNS isolated cleanup" as CFString, nil),
+              let service = SCNetworkServiceCopy(cleanup, serviceID as CFString) else {
+            throw VeilError.message("Isolated cleanup service is missing.")
+        }
+        try require(SCPreferencesLock(cleanup, false), "cleanup lock")
+        defer { SCPreferencesUnlock(cleanup) }
+        try require(SCNetworkServiceRemove(service), "remove isolated service")
+        try require(SCPreferencesCommitChanges(cleanup), "commit isolated service removal")
+        try require(SCPreferencesApplyChanges(cleanup), "apply isolated service removal")
+        guard let verify = SCPreferencesCreate(nil, "VeilDNS cleanup verification" as CFString, nil) else {
+            throw VeilError.message("Cannot verify service cleanup.")
+        }
+        try require(SCNetworkServiceCopy(verify, serviceID as CFString) == nil, "isolated service removal verified")
     }
 
     private static func sentinel() throws {

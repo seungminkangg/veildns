@@ -26,6 +26,27 @@ public enum SystemProxy {
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    public static func primaryServiceID() throws -> String? {
+        guard let store = SCDynamicStoreCreate(nil, "VeilDNS primary network" as CFString, nil, nil) else {
+            throw VeilError.message("현재 인터넷 연결의 네트워크 서비스를 확인할 수 없습니다.")
+        }
+        for entity in ["IPv4", "IPv6"] {
+            let key = SCDynamicStoreKeyCreateNetworkGlobalEntity(nil, kSCDynamicStoreDomainState, entity as CFString)
+            if let state = SCDynamicStoreCopyValue(store, key) as? [String: Any],
+               let primary = state["PrimaryService"] as? String, !primary.isEmpty {
+                return primary
+            }
+        }
+        return nil
+    }
+
+    public static func preferredServiceID(available: [String], saved: String, primary: String?, preferPrimary: Bool = false) -> String {
+        let active = primary.flatMap { available.contains($0) ? $0 : nil }
+        if preferPrimary, let active { return active }
+        if available.contains(saved) { return saved }
+        return active ?? available.first ?? ""
+    }
+
     private static func proxyProtocol(_ prefs: SCPreferences, serviceID: String) throws -> SCNetworkProtocol {
         guard let service = SCNetworkServiceCopy(prefs, serviceID as CFString),
               let protocolValue = SCNetworkServiceCopyProtocol(service, kSCNetworkProtocolTypeProxies) else {
@@ -82,7 +103,12 @@ public enum SystemProxy {
         let proxy = try proxyProtocol(prefs, serviceID: serviceID)
         let before = SCNetworkProtocolGetConfiguration(proxy) as? [String: Any] ?? [:]
         let after = try transform(before)
-        if NSDictionary(dictionary: before).isEqual(to: after) { return }
+        if NSDictionary(dictionary: before).isEqual(to: after) {
+            guard SCPreferencesApplyChanges(prefs) else {
+                throw VeilError.message("저장된 네트워크 설정을 다시 적용하지 못했습니다.")
+            }
+            return
+        }
         guard SCNetworkProtocolSetConfiguration(proxy, after as CFDictionary), SCPreferencesCommitChanges(prefs) else {
             throw VeilError.message("네트워크 설정을 저장하지 못했습니다. 복구 기록을 유지합니다.")
         }

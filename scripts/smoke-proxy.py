@@ -31,9 +31,11 @@ def main():
             "domains": [], "exclusions": [], "fragment_delay_ms": 5, "allow_private": False,
         }), encoding="utf-8")
         subprocess.run([str(args.engine.resolve()), "--check-config", str(config)], check=True)
-        process = subprocess.Popen([str(args.engine.resolve()), "--config", str(config)],
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        process = subprocess.Popen([str(args.engine.resolve()), "--config", str(config), "--exit-on-stdin-close"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True)
         output = queue.Queue()
+        stopped = None
         def read_output():
             for line in process.stdout:
                 output.put(line.rstrip())
@@ -82,7 +84,7 @@ def main():
                     print(json.dumps({"smoke": "passed", "resolver": args.resolver,
                                       "tls": tls.version(), "bytes_received": len(response)}))
         finally:
-            process.terminate()
+            process.stdin.close()
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
@@ -90,7 +92,16 @@ def main():
                 process.wait(timeout=5)
             reader.join(timeout=2)
             while not output.empty():
-                print(output.get_nowait())
+                line = output.get_nowait()
+                print(line)
+                try:
+                    event = json.loads(line)
+                    if event.get("event") == "stopped":
+                        stopped = event
+                except json.JSONDecodeError:
+                    pass
+        assert process.returncode == 0, "Engine did not exit cleanly after stdin EOF"
+        assert stopped is not None and stopped["fragmented"] >= 1, "No SNI fragmentation was reported for the real TLS handshake"
 
 
 if __name__ == "__main__":

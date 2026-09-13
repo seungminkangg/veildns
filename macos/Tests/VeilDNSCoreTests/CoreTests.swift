@@ -155,3 +155,23 @@ struct EscapingTests {
     }
     #endif
 }
+
+#if os(macOS)
+@Suite("Active network selection")
+struct NetworkSelectionTests {
+    @Test func newSelectionPrefersActiveServiceOverAlphabeticalBridge() {
+        #expect(SystemProxy.preferredServiceID(available: ["bridge", "wifi"], saved: "", primary: "wifi") == "wifi")
+    }
+
+    @Test func validManualSelectionIsPreservedUntilExplicitActiveRefresh() {
+        #expect(SystemProxy.preferredServiceID(available: ["ethernet", "wifi"], saved: "ethernet", primary: "wifi") == "ethernet")
+        #expect(SystemProxy.preferredServiceID(available: ["ethernet", "wifi"], saved: "ethernet", primary: "wifi", preferPrimary: true) == "wifi")
+    }
+
+    @Test func missingOrUnavailablePrimaryDoesNotProduceInvalidSelection() {
+        #expect(SystemProxy.preferredServiceID(available: ["wifi"], saved: "removed", primary: "vpn") == "wifi")
+        #expect(SystemProxy.preferredServiceID(available: [], saved: "removed", primary: "wifi") == "")
+        #expect(SystemProxy.preferredServiceID(available: ["wifi"], saved: "", primary: nil) == "wifi")
+    }
+}
+#endif
