@@ -1,15 +1,46 @@
 # VeilDNS
 
-**macOS에서 DNS over HTTPS와 선택 도메인 SNI 분할을 사용하는 오픈소스 앱.**
+### 맥에는 왜 시크릿DNS가 없을까?
+
+윈도우 쓸 땐 있던 게 맥으로 넘어오니 없습니다. 그래서 직접 만들었습니다.
+**클릭 한 번, 비밀번호 한 번.** 그 다음부터는 묻지 않습니다.
 
 [![macOS verification](https://github.com/seungminkangg/veildns/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/seungminkangg/veildns/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-63dbc4.svg)](LICENSE)
-
-SwiftUI 메뉴 막대 앱과 Rust 네트워크 엔진으로 구성합니다. [시크릿DNS](https://secretdns.kilho.net/)의 공개 기능에서 영감을 받은 독립 구현이며, 길호넷의 공식 macOS판이나 제휴 제품이 아닙니다. 원본 코드·바이너리·브랜드 자산을 사용하지 않습니다.
+[![Downloads](https://img.shields.io/github/downloads/seungminkangg/veildns/total?label=downloads&color=63dbc4)](https://github.com/seungminkangg/veildns/releases)
+[![Stars](https://img.shields.io/github/stars/seungminkangg/veildns?style=flat&color=63dbc4)](https://github.com/seungminkangg/veildns/stargazers)
 
 ![VeilDNS running on macOS, captured from the native Apple Silicon CI build](docs/images/veildns-light.png)
 
-> **Preview**: macOS 15 이상, Apple Silicon 및 Intel. 공개 소스와 macOS 자동 검증을 제공합니다. 현재 배포 파일은 ad-hoc 서명이며 Apple 공증을 받은 앱이 아닙니다. 실제 사용자의 Mac, 브라우저 및 통신사 환경에 대한 검증 현황은 [검증 기록](docs/VALIDATION.md)을 확인하세요.
+SwiftUI 메뉴 막대 앱 + Rust 네트워크 엔진. DNS over HTTPS와 TLS ClientHello record 분할을 로컬 프록시로 제공합니다.
+[시크릿DNS](https://secretdns.kilho.net/)의 공개 기능에서 영감을 받은 **독립 구현**이며, 길호넷의 공식 macOS판이나 제휴 제품이 아닙니다. 원본 코드·바이너리·브랜드 자산을 사용하지 않습니다.
+
+### 이런 사람을 위해 만들었습니다
+
+- DNS를 1.1.1.1로 바꿔봤지만 그대로인 사람
+- 브라우저 확장, VPN, 유료 구독까지 갔다가 되돌아온 사람
+- "그거 되는 프로그램" APK나 정체불명 dmg를 받기는 싫은 사람
+- 코드를 직접 읽고 뭘 하는 앱인지 확인하고 싶은 사람
+
+### 안 하는 것도 분명히
+
+전체 트래픽 VPN이 아닙니다. IP를 바꾸지 않습니다. 익명화 도구가 아닙니다.
+HTTPS를 복호화하지 않고 루트 인증서도 설치하지 않습니다. 브라우징 기록을 수집하거나 어디에도 보내지 않습니다.
+**모든 DPI 장비에 대한 우회 성공을 보장하지 않습니다.** 되는 환경이 있고 안 되는 환경이 있습니다.
+어떤 사이트에 쓸지는 전적으로 사용자가 정하고 사용자가 책임집니다.
+
+> **Preview**: macOS 15 이상, Apple Silicon 및 Intel. 배포 파일은 ad-hoc 서명이며 Apple 공증을 받은 앱이 아닙니다. 실제 사용자 환경 검증 현황은 [검증 기록](docs/VALIDATION.md)에 있습니다.
+
+### 30초 만에 확인하기
+
+```bash
+git clone https://github.com/seungminkangg/veildns.git && cd veildns
+cargo test --manifest-path engine/Cargo.toml --locked   # 18개 테스트
+bash scripts/build-macos.sh && open build/VeilDNS.app
+```
+
+⭐ 이 프로젝트가 쓸모 있었다면 **star** 한 번이 다음 기여자를 데려옵니다.
+맥에서 뭐가 안 되는지 [이슈](https://github.com/seungminkangg/veildns/issues)로 알려주세요. 통신사·브라우저 조합 제보가 가장 필요합니다.
 
 ## 설치와 사용
 
