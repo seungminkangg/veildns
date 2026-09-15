@@ -6,16 +6,16 @@ use crate::{BoxError, error};
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Resolver {
-    #[default]
     Cloudflare,
+    #[default]
     Google,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Fragmentation {
-    #[default]
     Selected,
+    #[default]
     All,
     Off,
 }
@@ -36,8 +36,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             listen_port: 8080,
-            resolver: Resolver::Cloudflare,
-            fragmentation: Fragmentation::Selected,
+            resolver: Resolver::Google,
+            fragmentation: Fragmentation::All,
             domains: Vec::new(),
             exclusions: Vec::new(),
             fragment_delay_ms: 5,
@@ -140,6 +140,7 @@ mod tests {
     #[test]
     fn domain_rules_have_label_boundaries_and_exclusions_win() {
         let mut c = Config {
+            fragmentation: Fragmentation::Selected,
             domains: vec!["*.Example.COM".into(), "example.org".into()],
             exclusions: vec!["safe.example.com".into()],
             ..Config::default()
@@ -151,6 +152,30 @@ mod tests {
         assert!(!c.should_fragment("safe.example.com", "sub.example.com"));
         assert!(!c.should_fragment("example.com", "safe.example.com"));
         assert!(c.should_fragment("example.org", "EXAMPLE.ORG"));
+    }
+
+    #[test]
+    fn defaults_cover_every_https_connection_through_google() {
+        let c = Config::default();
+        assert_eq!(c.resolver, Resolver::Google);
+        assert_eq!(c.fragmentation, Fragmentation::All);
+        // An empty document must inherit the same defaults the app writes.
+        assert_eq!(
+            serde_json::from_str::<Config>("{}").unwrap().resolver,
+            Resolver::Google
+        );
+        assert_eq!(
+            serde_json::from_str::<Config>("{}").unwrap().fragmentation,
+            Fragmentation::All
+        );
+        // Exclusions stay authoritative when every connection is eligible.
+        let mut c = Config {
+            exclusions: vec!["safe.example.com".into()],
+            ..Config::default()
+        };
+        c.validate().unwrap();
+        assert!(c.should_fragment("example.com", "example.com"));
+        assert!(!c.should_fragment("safe.example.com", "safe.example.com"));
     }
 
     #[test]

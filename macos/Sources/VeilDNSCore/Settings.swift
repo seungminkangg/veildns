@@ -19,8 +19,8 @@ public enum Fragmentation: String, Codable, CaseIterable, Sendable, Identifiable
 }
 
 public struct AppSettings: Codable, Equatable, Sendable {
-    public var resolver: Resolver = .cloudflare
-    public var fragmentation: Fragmentation = .selected
+    public var resolver: Resolver = .google
+    public var fragmentation: Fragmentation = .all
     public var domainsText = ""
     public var exclusionsText = ""
     public var serviceID = ""

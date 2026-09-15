@@ -211,8 +211,21 @@ struct MainView: View {
                 Label("네트워크 설정을 돌려놓는 방식", systemImage: "arrow.uturn.backward.circle").font(.headline)
                 Text("시작 전에 기존 HTTP/HTTPS 프록시와 예외 설정을 복구 기록에 저장합니다. 다른 프록시가 켜져 있으면 시작하지 않습니다. 종료 시 VeilDNS가 설정한 값만 확인하여 복구하고, 다른 앱이 바꾼 설정은 유지합니다.")
                     .font(.callout).foregroundStyle(.secondary)
-                Text("관리자 도우미는 연결 중에만 실행됩니다. 앱 또는 엔진이 종료되면 복구를 시도합니다. 강제 전원 종료나 도우미 오류 뒤에는 다음 실행에서 복구 버튼을 사용하세요.")
+                Text("앱 또는 엔진이 종료되면 관리자 도우미가 복구를 시도합니다. 강제 전원 종료나 도우미 오류 뒤에는 다음 실행에서 복구 버튼을 사용하세요.")
                     .font(.callout).foregroundStyle(.secondary)
+            }
+            card {
+                Label("관리자 권한 한 번만 승인", systemImage: "key.horizontal").font(.headline)
+                Text(model.persistentAuthorization
+                     ? "관리자 도우미가 설치되어 있습니다. 연결할 때마다 비밀번호를 묻지 않습니다."
+                     : "첫 연결에서 한 번만 macOS 관리자 승인을 요청합니다. 승인하면 도우미가 설치되어 이후 연결에는 비밀번호가 필요 없습니다.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text("도우미는 VeilDNS가 사용하는 HTTP/HTTPS 프록시 설정만 변경하고 복구합니다. 설치한 사용자 계정만 사용할 수 있으며, 그 계정에서 실행되는 프로그램은 비밀번호 없이 이 설정을 바꿀 수 있습니다.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if model.persistentAuthorization {
+                    Button("권한 유지 해제") { Task { await model.removeAuthorization() } }
+                        .font(.callout).disabled(!model.canEdit)
+                }
             }
             card {
                 Label("시스템 암호화 DNS · 선택 사항", systemImage: "doc.badge.gearshape").font(.headline)

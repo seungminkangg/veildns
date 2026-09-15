@@ -1,7 +1,7 @@
 {
   "listen_port": 8080,
-  "resolver": "cloudflare",
-  "fragmentation": "selected",
+  "resolver": "google",
+  "fragmentation": "all",
   "domains": ["example.com", "*.example.com"],
   "exclusions": [],
   "fragment_delay_ms": 5,

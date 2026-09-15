@@ -100,48 +100,98 @@ final class EngineProcess {
 }
 
 struct HelperResult: Sendable {
-    let exitCode: Int32
-    let output: String
+    let restored: Bool
+    let preservedChanges: [String]
     let error: String
 
-    var restored: Bool {
-        guard exitCode == 0, let data = output.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return object["event"] as? String == "restored"
-    }
-
-    var preservedChanges: [String] {
-        guard let data = output.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
-        return object["preserved_changes"] as? [String] ?? []
+    init(_ response: PrivilegedChannel.Response) {
+        restored = response.event == "restored"
+        preservedChanges = response.preservedChanges
+        error = response.error
     }
 }
 
+/// Talks to the persistent privileged daemon, asking for authorization only when it must be installed.
 enum HelperProcess {
     static func run(operation: String) async throws -> HelperResult {
+        try await ensureInstalled()
+        return HelperResult(try await background { try exchange(operation: operation, timeout: nil) })
+    }
+
+    /// True when a daemon of this exact protocol version is already answering.
+    static func isInstalled() async -> Bool {
+        guard let response = try? await background({ try exchange(operation: "status", timeout: 5) }) else { return false }
+        return response.event == "ready" && response.version == PrivilegedChannel.version
+    }
+
+    static func uninstall() async throws {
+        let response = try await background { try exchange(operation: "uninstall", timeout: 20) }
+        guard response.event == "uninstalled" else {
+            throw VeilError.message(response.error.isEmpty ? "네트워크 도우미를 제거하지 못했습니다." : response.error)
+        }
+    }
+
+    private static func ensureInstalled() async throws {
+        if await isInstalled() { return }
+        try await authorizeInstall()
+        for _ in 0..<100 {
+            if await isInstalled() { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw VeilError.message("네트워크 도우미가 시작되지 않았습니다. 다시 시도해 주세요.")
+    }
+
+    /// The only step that shows the macOS authorization dialog. It runs once per install or version change.
+    private static func authorizeInstall() async throws {
         guard let helper = Bundle.main.resourceURL?.appendingPathComponent("VeilDNSProxyHelper"),
               FileManager.default.isExecutableFile(atPath: helper.path) else {
             throw VeilError.message("네트워크 복구 도우미가 앱에 없습니다. 완성된 앱 번들을 사용해 주세요.")
         }
         let script = CommandEscaping.privilegedInvocation(executable: helper.path,
-            arguments: [operation, String(getuid()), SecureFiles.journalURL.path])
-        return try await withCheckedThrowingContinuation { continuation in
+            arguments: ["install", String(getuid())])
+        let failure: String = try await withCheckedThrowingContinuation { continuation in
             let process = Process()
-            let stdout = Pipe(), stderr = Pipe()
+            let stderr = Pipe()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             process.arguments = ["-e", script]
             process.standardInput = FileHandle.nullDevice
-            process.standardOutput = stdout
+            process.standardOutput = FileHandle.nullDevice
             process.standardError = stderr
             process.terminationHandler = { child in
-                let output = stdout.fileHandleForReading.readDataToEndOfFile()
-                let error = stderr.fileHandleForReading.readDataToEndOfFile()
-                continuation.resume(returning: HelperResult(exitCode: child.terminationStatus,
-                    output: String(decoding: output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines),
-                    error: String(decoding: error.suffix(4000), as: UTF8.self)))
+                let error = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile().suffix(4000), as: UTF8.self)
+                continuation.resume(returning: child.terminationStatus == 0 ? "" : error)
             }
             do { try process.run() }
             catch { continuation.resume(throwing: error) }
+        }
+        guard failure.isEmpty else {
+            throw VeilError.message(failure.contains("-128") ? "네트워크 도우미 설치가 취소되었습니다." : failure)
+        }
+    }
+
+    private static func exchange(operation: String, timeout: Int?) throws -> PrivilegedChannel.Response {
+        guard let fd = try PrivilegedChannel.connect() else {
+            throw VeilError.message("설치된 네트워크 도우미가 없습니다.")
+        }
+        defer { close(fd) }
+        if let timeout {
+            // A watch session owns the daemon; short requests must not hang the interface behind it.
+            var limit = timeval(tv_sec: timeout, tv_usec: 0)
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
+        }
+        try PrivilegedChannel.write(try JSONEncoder().encode(PrivilegedChannel.Request(operation: operation)), to: fd)
+        guard let raw = try PrivilegedChannel.readMessage(fd) else {
+            throw VeilError.message("네트워크 도우미와의 연결이 끊어졌습니다.")
+        }
+        return try JSONDecoder().decode(PrivilegedChannel.Response.self, from: raw)
+    }
+
+    private static func background<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do { continuation.resume(returning: try work()) }
+                catch { continuation.resume(throwing: error) }
+            }
         }
     }
 }

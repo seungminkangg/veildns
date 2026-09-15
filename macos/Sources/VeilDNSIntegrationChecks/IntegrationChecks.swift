@@ -15,6 +15,10 @@ struct IntegrationChecks {
                 try sentinel()
                 return
             }
+            if CommandLine.arguments.dropFirst().first == "--client" {
+                try client(operation: CommandLine.arguments[2])
+                return
+            }
             guard geteuid() == 0, let rawOwner = ProcessInfo.processInfo.environment["SUDO_UID"],
                   let owner = UInt32(rawOwner), owner != 0, let user = getpwuid(owner),
                   let homePointer = user.pointee.pw_dir else {
@@ -62,6 +66,8 @@ struct IntegrationChecks {
                 try runScenario(scenario, serviceID: serviceID, owner: owner, group: group, journalURL: journalURL)
                 print("PASS \(scenario)")
             }
+            try runDaemonScenario(serviceID: serviceID, owner: owner, group: group, journalURL: journalURL)
+            print("PASS persistent-authorization")
             for (id, original) in before {
                 try require(NSDictionary(dictionary: try SystemProxy.read(serviceID: id)).isEqual(to: original), "active service proxy settings unchanged")
             }
@@ -104,6 +110,120 @@ struct IntegrationChecks {
             throw VeilError.message("Cannot verify service cleanup.")
         }
         try require(SCNetworkServiceCopy(verify, serviceID as CFString) == nil, "isolated service removal verified")
+    }
+
+    /// Speaks the daemon protocol as the unprivileged owner account and prints the single response.
+    private static func client(operation: String) throws {
+        guard geteuid() != 0 else { throw VeilError.message("Client must run as the non-root runner.") }
+        guard let fd = try PrivilegedChannel.connect() else { throw VeilError.message("No daemon socket.") }
+        defer { close(fd) }
+        try PrivilegedChannel.write(try JSONEncoder().encode(PrivilegedChannel.Request(operation: operation)), to: fd)
+        guard let raw = try PrivilegedChannel.readMessage(fd) else { throw VeilError.message("Daemon closed early.") }
+        FileHandle.standardOutput.write(raw + Data([10]))
+    }
+
+    private static func helperTool() -> URL {
+        URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+            .appendingPathComponent("VeilDNSProxyHelper")
+    }
+
+    /// Proves one authorization installs a daemon that then applies and restores with no further prompt.
+    private static func runDaemonScenario(serviceID: String, owner: uid_t, group: gid_t, journalURL: URL) throws {
+        defer { _ = run(helperTool().path, ["uninstall"]) }
+        try require(run(helperTool().path, ["install", String(owner)]).status == 0, "install privileged daemon")
+
+        var socketInfo = stat()
+        try require(stat(PrivilegedChannel.socketPath, &socketInfo) == 0, "daemon socket exists")
+        try require(socketInfo.st_uid == owner, "daemon socket owned by the installing account")
+        try require(socketInfo.st_mode & 0o777 == 0o600, "daemon socket is private to the installing account")
+        try require(FileManager.default.fileExists(atPath: PrivilegedChannel.daemonPath), "launchd job installed")
+
+        // Root is not the installing account, so the daemon must refuse it.
+        if let fd = try PrivilegedChannel.connect() {
+            defer { close(fd) }
+            try PrivilegedChannel.write(try JSONEncoder().encode(PrivilegedChannel.Request(operation: "status")), to: fd)
+            let raw = try PrivilegedChannel.readMessage(fd) ?? Data()
+            let refused = try? JSONDecoder().decode(PrivilegedChannel.Response.self, from: raw)
+            try require(refused?.event != "ready", "daemon refuses a peer that is not the installing account")
+        }
+
+        let status = try clientResponse(operation: "status", owner: owner)
+        try require(status.event == "ready", "daemon answers the installing account")
+        try require(status.version == PrivilegedChannel.version, "daemon reports its protocol version")
+
+        let original: [String: Any] = ["ExceptionsList": ["*.local", "original.example"]]
+        try setSettings(original, serviceID: serviceID)
+        let (appPID, enginePID) = try startSentinel(owner: owner)
+        let appIdentity = try ProcessIdentity.capture(appPID)
+        let engineIdentity = try ProcessIdentity.capture(enginePID)
+        defer {
+            if (try? ProcessIdentity.capture(appPID)) == appIdentity { kill(appPID, SIGKILL) }
+            if (try? ProcessIdentity.capture(enginePID)) == engineIdentity { kill(enginePID, SIGKILL) }
+        }
+        let journal = try ProxyJournal(serviceID: serviceID, serviceName: "CI isolated", original: original, ownerUID: owner,
+            appPID: appPID, enginePID: enginePID, appIdentity: appIdentity, engineIdentity: engineIdentity)
+        try SecureFiles.write(try JSONEncoder().encode(journal), to: journalURL)
+        try FileManager.default.setAttributes([.ownerAccountID: owner, .groupOwnerAccountID: group, .posixPermissions: 0o600], ofItemAtPath: journalURL.path)
+
+        // No authorization dialog and no root invocation: the unprivileged client just asks the daemon.
+        let watcher = Process(), watcherOutput = Pipe()
+        watcher.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        watcher.arguments = ["-E", "-u", "#\(owner)", CommandLine.arguments[0], "--client", "watch"]
+        watcher.standardInput = FileHandle.nullDevice
+        watcher.standardOutput = watcherOutput
+        watcher.standardError = FileHandle.standardError
+        try watcher.run()
+        defer { if watcher.isRunning { watcher.terminate() } }
+        try waitUntil("daemon proxy apply") {
+            try require(watcher.isRunning, "watch client stayed connected")
+            return ProxyPlan.isOwned(try SystemProxy.read(serviceID: serviceID), original: original)
+        }
+        try require(kill(enginePID, SIGKILL) == 0, "stop watched engine")
+        try waitUntil("daemon restoration") { !watcher.isRunning }
+        try require(NSDictionary(dictionary: try SystemProxy.read(serviceID: serviceID)).isEqual(to: original), "daemon restores exactly")
+        let receipt = try JSONDecoder().decode(PrivilegedChannel.Response.self,
+            from: watcherOutput.fileHandleForReading.readDataToEndOfFile())
+        try require(receipt.event == "restored", "daemon restoration receipt")
+
+        let removal = try clientResponse(operation: "uninstall", owner: owner)
+        try require(removal.event == "uninstalled", "daemon uninstall receipt")
+        try waitUntil("launchd job removal") { !FileManager.default.fileExists(atPath: PrivilegedChannel.daemonPath) }
+        try require(!FileManager.default.fileExists(atPath: PrivilegedChannel.toolPath), "privileged tool removed")
+        try FileManager.default.removeItem(at: journalURL)
+    }
+
+    private static func clientResponse(operation: String, owner: uid_t) throws -> PrivilegedChannel.Response {
+        let result = run("/usr/bin/sudo", ["-E", "-u", "#\(owner)", CommandLine.arguments[0], "--client", operation])
+        try require(result.status == 0, "client \(operation) completes")
+        return try JSONDecoder().decode(PrivilegedChannel.Response.self, from: result.output)
+    }
+
+    private static func run(_ executable: String, _ arguments: [String]) -> (status: Int32, output: Data) {
+        let process = Process(), stdout = Pipe()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = stdout
+        process.standardError = FileHandle.standardError
+        do { try process.run() } catch { return (-1, Data()) }
+        let output = stdout.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, output)
+    }
+
+    private static func startSentinel(owner: uid_t) throws -> (pid_t, pid_t) {
+        let launcher = Process(), stdout = Pipe()
+        launcher.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        launcher.arguments = ["-E", "-u", "#\(owner)", CommandLine.arguments[0], "--sentinel"]
+        launcher.standardInput = FileHandle.nullDevice
+        launcher.standardOutput = stdout
+        launcher.standardError = FileHandle.standardError
+        try launcher.run()
+        guard let ids = try JSONSerialization.jsonObject(with: stdout.fileHandleForReading.availableData) as? [String: Int32],
+              let appPID = ids["app"], let enginePID = ids["engine"] else {
+            throw VeilError.message("Sentinel did not report its child PID.")
+        }
+        return (appPID, enginePID)
     }
 
     private static func sentinel() throws {

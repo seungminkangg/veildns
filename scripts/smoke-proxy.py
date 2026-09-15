@@ -19,7 +19,7 @@ import time
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("engine", type=pathlib.Path)
-    parser.add_argument("--resolver", choices=["cloudflare", "google"], default="cloudflare")
+    parser.add_argument("--resolver", choices=["cloudflare", "google"], default="google")
     args = parser.parse_args()
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))

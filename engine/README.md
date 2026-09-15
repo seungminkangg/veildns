@@ -67,8 +67,8 @@ See [config.example.json](config.example.json). Omitted fields use these default
 | Field | Default | Accepted values |
 | --- | --- | --- |
 | `listen_port` | `8080` | Integer, 1–65535 |
-| `resolver` | `"cloudflare"` | `"cloudflare"`, `"google"` |
-| `fragmentation` | `"selected"` | `"selected"`, `"all"`, `"off"` |
+| `resolver` | `"google"` | `"cloudflare"`, `"google"` |
+| `fragmentation` | `"all"` | `"selected"`, `"all"`, `"off"` |
 | `domains` | `[]` | Up to 4096 exact or wildcard domain rules |
 | `exclusions` | `[]` | Up to 4096 exact or wildcard domain rules |
 | `fragment_delay_ms` | `5` | Integer, 0–100 |

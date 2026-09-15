@@ -15,6 +15,8 @@ final class AppModel {
     var state: State = .idle
     var message: String?
     var notice: String?
+    /// Reflects whether the one-time privileged install is already in place.
+    var persistentAuthorization = false
     private let engine = EngineProcess()
     private var helperTask: Task<HelperResult, Error>?
     private var helperResult: HelperResult?
@@ -59,11 +61,29 @@ final class AppModel {
         refreshServices()
         // A damaged preferences file must never hide a valid network recovery journal.
         if FileManager.default.fileExists(atPath: SecureFiles.journalURL.path) { state = .recovery }
+        Task { await refreshAuthorization() }
         engine.onExit = { [weak self] in
             guard let self, self.state == .active else { return }
             self.message = "네트워크 엔진이 종료되었습니다. 이전 프록시 설정을 복구합니다."
             Task { await self.stop() }
         }
+    }
+
+    func refreshAuthorization() async {
+        persistentAuthorization = await HelperProcess.isInstalled()
+    }
+
+    /// Removes the launchd job so VeilDNS asks for authorization again on the next connection.
+    func removeAuthorization() async {
+        guard state == .idle else {
+            message = "연결을 중지한 뒤 권한 유지를 해제할 수 있습니다."
+            return
+        }
+        do {
+            try await HelperProcess.uninstall()
+            notice = "네트워크 도우미를 제거했습니다. 다음 연결에서 관리자 승인을 다시 요청합니다."
+        } catch { message = error.localizedDescription }
+        await refreshAuthorization()
     }
 
     func refreshServices(preferPrimary: Bool = false) {
@@ -139,6 +159,8 @@ final class AppModel {
                     try requirePrimaryService(snapshot.serviceID)
                     state = .active
                     beginMonitoring(snapshot)
+                    // The watch request already went through an installed daemon.
+                    persistentAuthorization = true
                     return
                 }
                 try await Task.sleep(for: .milliseconds(100))

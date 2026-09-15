@@ -28,6 +28,10 @@ stdin-EOF shutdown and a zero exit status for **each** DoH provider.
 The preview additionally checks current-service selection (three Swift tests),
 verifies isolated-service cleanup and current-set membership, waits for configd
 restoration, and rejects delayed callbacks from a previous engine launch.
+A fifth real-helper scenario installs the launchd daemon, asserts the socket is
+owned by the installing account at mode 0600, asserts a root peer is refused,
+then applies and restores a full session through the socket with no further
+authorization before uninstalling the job and tool.
 The [release workflow](../.github/workflows/ci.yml) repeats native tests, builds,
 real helper scenarios, live HTTPS and launch checks on the exact release commit.
 It creates a public prerelease only after both architecture jobs succeed. The
@@ -43,6 +47,9 @@ not change the runner's active system proxy.
 
 - A person's MacBook using Safari/Chrome, the administrator dialog, sleep/wake,
   captive portals, VPN coexistence, or real network-interface switching.
+- The persistent daemon surviving reboot, fast user switching, or a macOS
+  upgrade on a person's Mac. CI installs, exercises and removes it within one
+  ephemeral runner session.
 - Runtime compatibility on the minimum macOS 15 deployment target. The binary
   targets macOS 15, while observed native CI used macOS 26.
 - Installing the optional DNS profiles and observing their effective routing on
