@@ -189,7 +189,7 @@ struct IntegrationChecks {
         try require(removal.event == "uninstalled", "daemon uninstall receipt")
         try waitUntil("launchd job removal") { !FileManager.default.fileExists(atPath: PrivilegedChannel.daemonPath) }
         try require(!FileManager.default.fileExists(atPath: PrivilegedChannel.toolPath), "privileged tool removed")
-        try FileManager.default.removeItem(at: journalURL)
+        // The caller owns the recovery record; every scenario leaves it for the single cleanup at the end.
     }
 
     private static func clientResponse(operation: String, owner: uid_t) throws -> PrivilegedChannel.Response {
